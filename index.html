@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="fi">
 <head>
-    <title>Three.js Retkikeitin</title>
+    <title>Three.js Retkikeitin - Lopullinen versio</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
@@ -22,16 +22,22 @@
             color: #333;
             font-size: 16px;
         }
-        #controls {
+        #controls-container {
             position: absolute;
             bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
             display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            z-index: 10;
+        }
+        #buttons {
+            display: flex;
             flex-wrap: wrap;
             justify-content: center;
             gap: 10px;
-            z-index: 10;
         }
         button {
             padding: 12px 24px;
@@ -50,6 +56,22 @@
             transform: scale(0.98);
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        #flame-control-container {
+            display: flex;
+            align-items: center;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 10px 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        #flame-control-container label {
+            margin-right: 10px;
+            font-weight: 500;
+            color: #333;
+        }
+        #flame-slider {
+            width: 200px;
+        }
         #warning {
             position: absolute;
             top: 50%;
@@ -63,7 +85,7 @@
             font-size: 18px;
             text-align: center;
             z-index: 20;
-            display: none; /* Piilotettu oletuksena */
+            display: none; 
         }
     </style>
 </head>
@@ -72,11 +94,16 @@
 <div id="info">Pyöritä mallia hiirellä ja käytä painikkeita</div>
 <div id="warning"></div>
 
-<div id="controls">
-    <button id="gas-valve-btn">Avaa/Sulje kaasuhana</button>
-    <button id="air-vent-btn">Avaa/Sulje ilma-aukko</button>
-    <button id="light-match-btn">Sytytä tulitikku</button>
-    <button id="move-match-btn">Vie tulitikku polttimeen</button>
+<div id="controls-container">
+    <div id="flame-control-container">
+        <label for="flame-slider">Kaasun säätö:</label>
+        <input type="range" id="flame-slider" min="0" max="180" value="0">
+    </div>
+    <div id="buttons">
+        <button id="air-vent-btn">Avaa/Sulje ilma-aukko</button>
+        <button id="light-match-btn">Sytytä tulitikku</button>
+        <button id="move-match-btn">Vie tulitikku polttimeen</button>
+    </div>
 </div>
 
 <script type="importmap">
@@ -93,12 +120,13 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-    // Globaalit muuttujat
     let scene, camera, renderer, controls;
-    let leverGroup, ringAssembly, ringHole, matchstick, burnerParticles, matchParticles;
+    let leverGroup, ringAssembly, ringHole, matchstick, burnerParticles, matchParticles, smokeParticles;
+    let flameSlider;
     let isGasValveOpen = false, isAirVentOpen = false, isStoveLit = false;
     let isMatchMoving = false, isMatchAtBurner = false;
     let targetLeverRotation = 0, targetRingRotation = 0;
+    let flameIntensity = 0;
     let targetMatchPosition = new THREE.Vector3(4, 2, 0);
     let targetMatchQuaternion = new THREE.Quaternion();
     const clock = new THREE.Clock();
@@ -142,6 +170,7 @@
         const leverArm = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.2), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }));
         leverArm.position.x = 0.4;
         leverGroup.add(leverArm);
+
         const wheelGroup = new THREE.Group();
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.15, 16), leverArm.material);
         const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
@@ -154,6 +183,7 @@
         wheelGroup.add(wheel);
         wheelGroup.position.x = 0.8;
         leverGroup.add(wheelGroup);
+        
         leverGroup.position.set(0.5, valveYPos, 0);
         stoveGroup.add(leverGroup);
 
@@ -173,14 +203,21 @@
         ringHole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, ringTubeRadius * 2.1, 12), new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.2 }));
         ringHole.position.z = 0.22; ringHole.rotation.x = Math.PI / 2; ringHole.visible = false;
         ringAssembly.add(ringHole);
+        const handle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.4), brassMaterial);
+        handle.position.z = -0.22;
+        ringAssembly.add(handle);
         stoveGroup.add(ringAssembly);
         scene.add(stoveGroup);
 
-        // Luodaan partikkeliefekti polttimelle
-        burnerParticles = createParticleSystem(200, 0.25);
-        burnerParticles.position.y = burnerHeadYPos + 0.05; // Asetetaan polttimen pään päälle
+        burnerParticles = createParticleSystem(300, 0.25);
+        burnerParticles.position.y = burnerHeadYPos + 0.05;
         burnerParticles.visible = false;
         scene.add(burnerParticles);
+        
+        smokeParticles = createSmokeSystem(50, 0.25);
+        smokeParticles.position.y = burnerHeadYPos + 0.05;
+        smokeParticles.visible = false;
+        scene.add(smokeParticles);
     }
 
     function createMatchstick() {
@@ -189,12 +226,41 @@
         matchstick.add(new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshStandardMaterial({ color: 0x8b0000 })).translateY(1));
         
         matchParticles = createParticleSystem(50, 0.1);
-        matchParticles.position.y = 1.05;
-        matchstick.add(matchParticles);
+        scene.add(matchParticles); 
+        matchParticles.visible = false;
         
         matchstick.position.copy(targetMatchPosition);
         matchstick.visible = false;
         scene.add(matchstick);
+    }
+    
+    function createSmokeSystem(count, areaSize) {
+        const particles = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const velocities = new Float32Array(count * 3);
+
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * areaSize;
+            positions[i * 3 + 1] = Math.random() * 0.8;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * areaSize;
+            velocities[i * 3] = (Math.random() - 0.5) * 0.15;
+            velocities[i * 3 + 1] = Math.random() * 0.2 + 0.2;
+            velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.15;
+        }
+
+        particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        particles.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
+
+        const particleMaterial = new THREE.PointsMaterial({
+            size: 0.08,
+            color: 0x222222,
+            blending: THREE.NormalBlending,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.5
+        });
+
+        return new THREE.Points(particles, particleMaterial);
     }
 
     function createParticleSystem(count, areaSize) {
@@ -206,9 +272,8 @@
             positions[i * 3] = (Math.random() - 0.5) * areaSize;
             positions[i * 3 + 1] = Math.random() * 0.5;
             positions[i * 3 + 2] = (Math.random() - 0.5) * areaSize;
-
             velocities[i * 3] = (Math.random() - 0.5) * 0.1;
-            velocities[i * 3 + 1] = Math.random() * 0.5 + 0.5; // Ylöspäin
+            velocities[i * 3 + 1] = Math.random() * 0.5 + 0.5;
             velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.1;
         }
 
@@ -228,16 +293,15 @@
 
     function generateSprite() {
         const canvas = document.createElement('canvas');
-        canvas.width = 16;
-        canvas.height = 16;
+        canvas.width = 16; canvas.height = 16;
         const context = canvas.getContext('2d');
-        const gradient = context.createRadialGradient(canvas.width / 2, canvas.height / 2, 0, canvas.width / 2, canvas.height / 2, canvas.width / 2);
+        const gradient = context.createRadialGradient(8, 8, 0, 8, 8, 8);
         gradient.addColorStop(0, 'rgba(255,255,255,1)');
         gradient.addColorStop(0.2, 'rgba(255,255,255,1)');
         gradient.addColorStop(0.4, 'rgba(200,200,200,1)');
         gradient.addColorStop(1, 'rgba(0,0,0,1)');
         context.fillStyle = gradient;
-        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillRect(0, 0, 16, 16);
         return canvas;
     }
 
@@ -249,15 +313,7 @@
     }
 
     function setupControls() {
-        document.getElementById('gas-valve-btn').addEventListener('click', () => {
-            isGasValveOpen = !isGasValveOpen;
-            targetLeverRotation = isGasValveOpen ? -Math.PI / 2 : 0;
-            if (isGasValveOpen && isMatchAtBurner && !isStoveLit) {
-                lightStove();
-            } else if (!isGasValveOpen) {
-                extinguishStove();
-            }
-        });
+        flameSlider = document.getElementById('flame-slider');
 
         document.getElementById('air-vent-btn').addEventListener('click', () => {
             isAirVentOpen = !isAirVentOpen;
@@ -281,15 +337,38 @@
 
         document.getElementById('move-match-btn').addEventListener('click', () => {
             if (!matchstick.visible) return;
-            if (isGasValveOpen) {
-                showWarning("Ei näin! Kaasuhana päälle vasta, kun tikku palaa polttimen päällä!");
-                matchstick.visible = false;
+            if (isAirVentOpen) {
+                showWarning("Ilma-aukon tulee olla sytytettäessä kiinni!");
                 return;
             }
+            
             targetMatchPosition.set(0, 3.2, 1.2);
             targetMatchQuaternion.setFromEuler(new THREE.Euler(-Math.PI / 2.5, 0, 0));
             isMatchMoving = true;
         });
+
+        // --- MUOKATTU OSA: Kaasun säätimen logiikka ---
+        flameSlider.addEventListener('input', (e) => {
+            const sliderValue = parseInt(e.target.value);
+            const wasGasValveOpen = isGasValveOpen; // Tallennetaan edellinen tila
+            
+            isGasValveOpen = sliderValue >= 10;
+            flameIntensity = sliderValue / 180;
+            
+            targetLeverRotation = -sliderValue * (Math.PI / 180);
+
+            // Varoitus, jos kaasu avataan ilman, että tulitikku on valmiina polttimella
+            if (!wasGasValveOpen && isGasValveOpen && !isStoveLit && !isMatchAtBurner) {
+                showWarning("Kaasuhanan saa avata vasta silloin kun tulitikku palaa polttimon yläpuolella!");
+            }
+
+            if (isGasValveOpen && isMatchAtBurner && !isStoveLit) {
+                lightStove();
+            } else if (!isGasValveOpen && isStoveLit) {
+                extinguishStove();
+            }
+        });
+        // --- MUOKKAUS PÄÄTTYY ---
     }
 
     function lightStove() {
@@ -304,25 +383,47 @@
         burnerParticles.visible = false;
     }
 
-    function animateParticles(particleSystem, delta, color) {
+    // --- MUOKATTU OSA: Partikkelianimaatio ---
+    function animateParticles(particleSystem, delta, color, intensity = 0.5) {
         const positions = particleSystem.geometry.attributes.position.array;
         const velocities = particleSystem.geometry.attributes.velocity.array;
-        const areaSize = particleSystem === burnerParticles ? 0.25 : 0.1;
+        const isBurner = particleSystem === burnerParticles;
+        const isSmoke = particleSystem === smokeParticles;
+
+        // Muuttaa partikkelien kokoa reaaliaikaisesti tehonsäädön mukaan
+        if (isBurner) {
+            particleSystem.material.size = 0.03 + (intensity * 0.05); 
+        }
 
         for (let i = 0; i < positions.length / 3; i++) {
+            let speedMultiplier = 1.0;
+            let heightLimit = 1.0;
+
+            if (isBurner || isSmoke) {
+                let currentIntensity = intensity;
+                if(isBurner && isAirVentOpen) {
+                   currentIntensity *= 0.5;
+                }
+                speedMultiplier = (0.5 + currentIntensity * 1.5);
+                heightLimit = (0.5 + currentIntensity * 2.5);
+            }
+            
             positions[i * 3] += velocities[i * 3] * delta;
-            positions[i * 3 + 1] += velocities[i * 3 + 1] * delta;
+            positions[i * 3 + 1] += velocities[i * 3 + 1] * speedMultiplier * delta;
             positions[i * 3 + 2] += velocities[i * 3 + 2] * delta;
 
-            if (positions[i * 3 + 1] > 1.0) { // Reset particle
-                positions[i * 3] = (Math.random() - 0.5) * areaSize;
+            if (positions[i * 3 + 1] > heightLimit) {
+                positions[i * 3] = (Math.random() - 0.5) * 0.25;
                 positions[i * 3 + 1] = 0;
-                positions[i * 3 + 2] = (Math.random() - 0.5) * areaSize;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * 0.25;
             }
         }
         particleSystem.geometry.attributes.position.needsUpdate = true;
-        particleSystem.material.color.set(color);
+        if(color && particleSystem.material.color) {
+            particleSystem.material.color.set(color);
+        }
     }
+    // --- MUOKKAUS PÄÄTTYY ---
 
     function animate() {
         requestAnimationFrame(animate);
@@ -341,15 +442,32 @@
             if (matchstick.position.distanceTo(targetMatchPosition) < 0.01) {
                 isMatchMoving = false;
                 isMatchAtBurner = true;
+                if (isGasValveOpen && !isStoveLit) {
+                    lightStove();
+                }
             }
         }
-
+        
+        matchParticles.visible = matchstick.visible;
         if (matchstick.visible) {
+            const tipPosition = new THREE.Vector3(0, 1.08, 0);
+            matchstick.localToWorld(tipPosition);
+            matchParticles.position.copy(tipPosition);
             animateParticles(matchParticles, delta, 0xffaa33);
         }
+        
         if (isStoveLit) {
             const flameColor = isAirVentOpen ? 0x6699ff : 0xffcc33;
-            animateParticles(burnerParticles, delta, flameColor);
+            animateParticles(burnerParticles, delta, flameColor, flameIntensity);
+            
+            if (!isAirVentOpen) {
+                smokeParticles.visible = true;
+                animateParticles(smokeParticles, delta, null, flameIntensity);
+            } else {
+                smokeParticles.visible = false;
+            }
+        } else {
+             smokeParticles.visible = false;
         }
 
         controls.update();
